@@ -1,6 +1,29 @@
 import Cocoa
 import SwiftUI
 import ServiceManagement
+import Carbon
+
+// CGEventTap callback must not capture context; pass AppDelegate via refcon
+private func editEventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
+    guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
+    guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+    let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+
+    let flags = event.flags
+    let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+    if flags.contains(.maskControl), appDelegate.enabledKeyCodeSet.contains(keyCode) {
+        let isDown = (type == .keyDown)
+        if let src = CGEventSource(stateID: .hidSystemState),
+           let newEvent = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: isDown) {
+            newEvent.flags = .maskCommand
+            newEvent.post(tap: .cghidEventTap)
+        }
+        return nil
+    }
+
+    return Unmanaged.passUnretained(event)
+}
 
 @NSApplicationMain
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -10,6 +33,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarItem: NSStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private var langEventMonitor: Any?
     private var editEventMonitor: Any?
+    private var editEventTap: CFMachPort?
+    fileprivate var enabledKeyCodeSet: Set<CGKeyCode> = []
     
     private var enabledEditKeysValues: [String] = []
     private var editKeysState: EditHotKeys = []
@@ -123,7 +148,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editHotkeysSubmenu.addItem(newEditMenuItem("Copy/Paste: Control ⌃ + X | C | V", key: "c",tag: EditHotKeys.CopyPaste))
         editHotkeysSubmenu.addItem(NSMenuItem.separator())
         editHotkeysSubmenu.addItem(newEditMenuItem("Find: Control ^ + F",key: "f", tag: EditHotKeys.Find))
-        editHotkeysSubmenu.addItem(newEditMenuItem("Select all: Control ⌃ + A",key: "l", tag: EditHotKeys.All))
+        editHotkeysSubmenu.addItem(newEditMenuItem("Select all: Control ⌃ + A",key: "a", tag: EditHotKeys.All))
         editHotkeysSubmenu.addItem(newEditMenuItem("Open/Save: Control ⌃ + O | S", key: "o",tag: EditHotKeys.OpenSave))
         editHotkeysSubmenu.addItem(NSMenuItem.separator())
         editHotkeysSubmenu.addItem(newEditMenuItem("Print: Control ⌃ + P",key: "p",tag: EditHotKeys.Print))
@@ -172,23 +197,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func initWinEditEventMonitor() {
+        // Build enabled keys from settings (still used by menu/UI if needed)
+        enabledEditKeysValues.removeAll()
         for hotkeyType in editKeysState.elements() {
             enabledEditKeysValues.append(contentsOf: editHotkeysValues[hotkeyType.rawValue] ?? [])
         }
-        
-        // Enable key event monitor
-        editEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            // reset Flag when any key is pressed to prevent unwanted layout switch
-            // e.g. when user selects a text with [shift + option + arrow keys] combination
-            self.modifiersPressed = false
-            let char = event.charactersIgnoringModifiers
-            let charCode = event.keyCode
-            if (event.modifierFlags.contains(.control)){
-                
-                if(self.enabledEditKeysValues.contains(char ?? "/")){
-                    self.sendDefaultEditHotkey(char ?? "/", code:charCode)
-                }
-            }
+
+        // Collect layout-independent key codes for enabled options and store in property for callback access
+        let enabledKeyCodes = keyCodes(for: editKeysState).map { CGKeyCode($0) }
+        enabledKeyCodeSet = Set(enabledKeyCodes)
+
+        // Create CGEventTap for keyDown/keyUp to intercept before the system handles Control+<key>
+        let eventsMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        if let tap = CGEvent.tapCreate(tap: .cghidEventTap,
+                                       place: .headInsertEventTap,
+                                       options: .defaultTap,
+                                       eventsOfInterest: CGEventMask(eventsMask),
+                                       callback: editEventTapCallback,
+                                       userInfo: Unmanaged.passUnretained(self).toOpaque()) {
+            editEventTap = tap
+            let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
         }
     }
     
@@ -198,8 +228,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func deinitEditEventMonitor() {
-        guard editEventMonitor != nil else {return}
-        NSEvent.removeMonitor(editEventMonitor!)
+        if let tap = editEventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            editEventTap = nil
+        }
     }
     
     private func updateLangEventMonitor() {
@@ -224,20 +256,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // TODO: To add some more combinations for different use-cases
     private func sendDefaultChangeLayoutHotkey() {
-        // Create a native system 'Control + Space' event
-        // TODO: maybe better to read system's layout hotkeys instead of hardcoding
-        let src = CGEventSource(stateID: CGEventSourceStateID.hidSystemState)
-        let spaceDown = CGEvent(keyboardEventSource: src, virtualKey: Constants.spaceKeyCode, keyDown: true)
-        let spaceUp = CGEvent(keyboardEventSource: src, virtualKey: Constants.spaceKeyCode, keyDown: false)
-        
-        spaceDown?.flags = CGEventFlags.maskAlternate
-        spaceUp?.flags = CGEventFlags.maskAlternate
-        spaceDown?.flags = CGEventFlags.maskControl
-        spaceUp?.flags = CGEventFlags.maskControl
+        switchToNextKeyboardInputSource()
+    }
 
-        let loc = CGEventTapLocation.cghidEventTap
-        spaceDown?.post(tap: loc)
-        spaceUp?.post(tap: loc)
+    // Switch to the next enabled keyboard input source (avoids relying on system hotkeys like Spotlight)
+    private func switchToNextKeyboardInputSource() {
+        let properties: [CFString: Any] = [
+            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
+            kTISPropertyInputSourceIsEnabled: true
+        ]
+        let listRef: CFArray = TISCreateInputSourceList(properties as CFDictionary, false).takeRetainedValue()
+        let count = CFArrayGetCount(listRef)
+        guard count > 0 else { return }
+
+        let current: TISInputSource = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        guard let currentIDPtr = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return }
+        let currentID = unsafeBitCast(currentIDPtr, to: CFString.self) as String
+
+        var nextIndex = 0
+        for i in 0..<count {
+            let value = CFArrayGetValueAtIndex(listRef, i)
+            let src = unsafeBitCast(value, to: TISInputSource.self)
+            if let srcIDPtr = TISGetInputSourceProperty(src, kTISPropertyInputSourceID) {
+                let srcID = unsafeBitCast(srcIDPtr, to: CFString.self) as String
+                if srcID == currentID {
+                    nextIndex = (i + 1) % count
+                    break
+                }
+            }
+        }
+
+        let nextValue = CFArrayGetValueAtIndex(listRef, nextIndex)
+        let nextSrc = unsafeBitCast(nextValue, to: TISInputSource.self)
+        TISSelectInputSource(nextSrc)
     }
     
     private func sendDefaultEditHotkey(_ key:String, code:UInt16) {
@@ -247,10 +298,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let keyDown = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)
         
-        keyDown?.flags = CGEventFlags.maskAlternate
-        keyUp?.flags = CGEventFlags.maskAlternate
-        keyDown?.flags = CGEventFlags.maskCommand
-        keyUp?.flags = CGEventFlags.maskCommand
+        keyDown?.flags = [.maskCommand]
+        keyUp?.flags = [.maskCommand]
 
         let loc = CGEventTapLocation.cghidEventTap
         keyDown?.post(tap: loc)

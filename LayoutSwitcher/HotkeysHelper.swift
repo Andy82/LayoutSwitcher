@@ -5,8 +5,6 @@
 //  Created by Dima Stadub on 24.05.22.
 //
 
-import Foundation
-
 struct EditHotKeys: OptionSet, Hashable {
 
     let rawValue: Int
@@ -82,4 +80,3 @@ func keyCodes(for options: EditHotKeys) -> Set<UInt16> {
     }
     return set
 }
-

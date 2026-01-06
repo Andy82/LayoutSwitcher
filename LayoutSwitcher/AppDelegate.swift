@@ -1,41 +1,43 @@
-import Cocoa
+import AppKit
 import ServiceManagement
 import Carbon
 
 // CGEventTap callback must not capture context; pass AppDelegate via refcon
 private func editEventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
-    guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
-    let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+    return autoreleasepool { () -> Unmanaged<CGEvent>? in
+        guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+        let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
 
-    // Re-enable tap if the system disabled it
-    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        if let tap = appDelegate.editEventTap {
-            CGEvent.tapEnable(tap: tap, enable: true)
+        // Re-enable tap if the system disabled it
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = appDelegate.editEventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
         }
+
+        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+
+        let flags = event.flags
+        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if flags.contains(.maskControl), appDelegate.enabledKeyCodeSet.contains(keyCode) {
+            // Synthesize Cmd+key down and up, and suppress original Ctrl+key
+            if let src = appDelegate.eventSource {
+                if let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true) {
+                    down.flags = CGEventFlags.maskCommand
+                    down.post(tap: CGEventTapLocation.cghidEventTap)
+                }
+                if let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) {
+                    up.flags = CGEventFlags.maskCommand
+                    up.post(tap: CGEventTapLocation.cghidEventTap)
+                }
+            }
+            return nil
+        }
+
         return Unmanaged.passUnretained(event)
     }
-
-    guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-
-    let flags = event.flags
-    let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-
-    if flags.contains(.maskControl), appDelegate.enabledKeyCodeSet.contains(keyCode) {
-        // Synthesize Cmd+key down and up, and suppress original Ctrl+key
-        if let src = appDelegate.eventSource {
-            if let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true) {
-                down.flags = CGEventFlags.maskCommand
-                down.post(tap: CGEventTapLocation.cghidEventTap)
-            }
-            if let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) {
-                up.flags = CGEventFlags.maskCommand
-                up.post(tap: CGEventTapLocation.cghidEventTap)
-            }
-        }
-        return nil
-    }
-
-    return Unmanaged.passUnretained(event)
 }
 
 @NSApplicationMain
@@ -201,17 +203,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Enable key event monitor
         langEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard let self = self else { return }
-            let areModifiersActive = event.modifierFlags.contains(.shift) && event.modifierFlags.contains(secondModifierFlag)
-            if areModifiersActive {
-                // set Flag when required modifier keys pressed
-                self.modifiersPressed = true
-            } else if self.modifiersPressed {
-                // if required modifier keys pressed and Flag is set
-                // run change layout routine (keys released)
-                self.sendDefaultChangeLayoutHotkey()
-                // reset Flag
-                self.modifiersPressed = false
+            autoreleasepool {
+                guard let self = self else { return }
+                let areModifiersActive = event.modifierFlags.contains(.shift) && event.modifierFlags.contains(secondModifierFlag)
+                if areModifiersActive {
+                    // set Flag when required modifier keys pressed
+                    self.modifiersPressed = true
+                } else if self.modifiersPressed {
+                    // if required modifier keys pressed and Flag is set
+                    // run change layout routine (keys released)
+                    self.sendDefaultChangeLayoutHotkey()
+                    // reset Flag
+                    self.modifiersPressed = false
+                }
             }
         }
     }
@@ -254,6 +258,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func deinitLangEventMonitor() {
         guard langEventMonitor != nil else {return}
         NSEvent.removeMonitor(langEventMonitor!)
+        clearInputSourcesCache()
     }
     
     private func deinitEditEventMonitor() {
@@ -420,6 +425,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if (disabled){
             deinitLangEventMonitor()
             deinitEditEventMonitor()
+            clearInputSourcesCache()
         }
         else{
             updateLangEventMonitor()
@@ -483,4 +489,3 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         exit(0)
     }
 }
-

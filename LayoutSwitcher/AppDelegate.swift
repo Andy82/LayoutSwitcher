@@ -22,6 +22,14 @@ private func editEventTapCallback(proxy: CGEventTapProxy, type: CGEventType, eve
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
 
         if flags.contains(.maskControl), appDelegate.enabledKeyCodeSet.contains(keyCode) {
+            // If frontmost app is RDP and remap is enabled, convert Ctrl→Cmd; otherwise, for non-RDP do the same conversion
+            if let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                if appDelegate.rdpBundleIdentifiers.contains(bundleID) {
+                    if !appDelegate.rdpCtrlToCmdRemapEnabled {
+                        return Unmanaged.passUnretained(event)
+                    }
+                }
+            }
             // Synthesize Cmd+key down and up, and suppress original Ctrl+key
             if let src = appDelegate.eventSource {
                 if let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true) {
@@ -55,6 +63,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private var editKeysState: EditHotKeys = []
     private var modifiersPressed = false
+    
+    fileprivate var rdpCtrlToCmdRemapEnabled = true
+    fileprivate let rdpBundleIdentifiers: Set<String> = [
+        "com.microsoft.rdc.macos",            // Microsoft Remote Desktop
+        "com.microsoft.rdc.macos.beta",      // Beta
+        "com.microsoft.rdc"                   // Legacy identifiers (if any)
+    ]
 
     private struct Constants {
         // Icon image sixe
@@ -189,12 +204,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarMenu.addItem(disableItem)
         statusBarMenu.addItem(NSMenuItem.separator())
         
+        let rdpRemapItem = NSMenuItem(title: "Remap Ctrl→Cmd in RDP", action: #selector(toggleRdpRemap), keyEquivalent: "r")
+        rdpRemapItem.state = rdpCtrlToCmdRemapEnabled ? .on : .off
+        statusBarMenu.addItem(rdpRemapItem)
+        statusBarMenu.addItem(NSMenuItem.separator())
+        
         // Define other menu items
         statusBarMenu.addItem(NSMenuItem.separator())
         statusBarMenu.addItem(withTitle: "About...", action: #selector(applicationAbout), keyEquivalent: "a")
         statusBarMenu.addItem(withTitle: "Quit", action: #selector(applicationQuit), keyEquivalent: "q")
         
         menuBarItem.menu = statusBarMenu
+    }
+    
+    @objc private func toggleRdpRemap(_ sender: NSMenuItem) {
+        sender.state = sender.state == .on ? .off : .on
+        rdpCtrlToCmdRemapEnabled = (sender.state == .on)
     }
     
     private func initLanSwitchEventMonitor() {
@@ -489,3 +514,4 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         exit(0)
     }
 }
+

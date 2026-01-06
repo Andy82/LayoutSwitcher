@@ -18,58 +18,23 @@ struct EditHotKeys: OptionSet, Hashable {
     static let OpenSave       = EditHotKeys(rawValue: 1 << 4)
     static let Print     = EditHotKeys(rawValue: 1 << 5)
 
-    func elements() -> AnySequence<Self> {
-        var remainingBits = rawValue
-        var bitMask: RawValue = 1
-        return AnySequence {
-            return AnyIterator {
-                while remainingBits != 0 {
-                    defer { bitMask = bitMask &* 2 }
-                    if remainingBits & bitMask != 0 {
-                        remainingBits = remainingBits & ~bitMask
-                        return Self(rawValue: bitMask)
-                    }
-                }
-                return nil
+}
+
+extension EditHotKeys {
+    /// Faster iteration without AnySequence/AnyIterator allocations
+    func elementsArray() -> [Self] {
+        var result: [Self] = []
+        var bits = rawValue
+        var mask = 1
+        while bits != 0 {
+            if (bits & mask) != 0 {
+                result.append(Self(rawValue: mask))
+                bits &= ~mask
             }
+            mask &*= 2
         }
+        return result
     }
-}
-
-var editHotkeysValues = [
-    // Добавлены русские эквиваленты для работы при включённой русской раскладке (ЙЦУКЕН)
-    EditHotKeys.UndRedo.rawValue: ["z","y","я","н"],
-    EditHotKeys.CopyPaste.rawValue: ["x","c","v","ч","с","м"],
-    EditHotKeys.Find.rawValue: ["f","а"],
-    EditHotKeys.All.rawValue: ["a","ф"],
-    EditHotKeys.OpenSave.rawValue: ["o", "s","щ","ы"],
-    EditHotKeys.Print.rawValue: ["p","з"]
-]
-
-
-// Упрощённая карта соответствий только для используемых хоткеев
-let ruToEnHotkeyMap: [Character: Character] = [
-    "я":"z", // Z
-    "н":"y", // Y
-    "ч":"x", // X
-    "с":"c", // C
-    "м":"v", // V
-    "ф":"a", // A
-    "а":"f", // F
-    "щ":"o", // O
-    "ы":"s", // S
-    "з":"p"  // P
-]
-/// Нормализация символа хоткея к латинскому эквиваленту (или возврат самого символа, если уже латиница)
-func normalizeHotkeyCharacter(_ char: Character) -> Character {
-    let lower = String(char).lowercased().first ?? char
-    return ruToEnHotkeyMap[lower] ?? lower
-}
-
-/// Нормализация строки хоткея (берётся первый символ)
-func normalizeHotkeyString(_ s: String) -> String {
-    guard let first = s.first else { return s.lowercased() }
-    return String(normalizeHotkeyCharacter(first))
 }
 
 // MARK: - Layout-independent key codes mapping (ANSI virtual key codes)
@@ -110,7 +75,7 @@ let editHotkeysKeyCodes: [EditHotKeys: [UInt16]] = [
 /// Convenience: get all key codes for a combined option set
 func keyCodes(for options: EditHotKeys) -> Set<UInt16> {
     var set = Set<UInt16>()
-    for element in options.elements() {
+    for element in options.elementsArray() {
         if let codes = editHotkeysKeyCodes[element] {
             set.formUnion(codes)
         }

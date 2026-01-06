@@ -1,5 +1,4 @@
 import Cocoa
-import SwiftUI
 import ServiceManagement
 import Carbon
 
@@ -16,17 +15,22 @@ private func editEventTapCallback(proxy: CGEventTapProxy, type: CGEventType, eve
         return Unmanaged.passUnretained(event)
     }
 
-    guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
+    guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
     let flags = event.flags
     let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
 
     if flags.contains(.maskControl), appDelegate.enabledKeyCodeSet.contains(keyCode) {
-        let isDown = (type == .keyDown)
-        if let src = CGEventSource(stateID: .hidSystemState),
-           let newEvent = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: isDown) {
-            newEvent.flags = .maskCommand
-            newEvent.post(tap: .cghidEventTap)
+        // Synthesize Cmd+key down and up, and suppress original Ctrl+key
+        if let src = appDelegate.eventSource {
+            if let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true) {
+                down.flags = CGEventFlags.maskCommand
+                down.post(tap: CGEventTapLocation.cghidEventTap)
+            }
+            if let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) {
+                up.flags = CGEventFlags.maskCommand
+                up.post(tap: CGEventTapLocation.cghidEventTap)
+            }
         }
         return nil
     }
@@ -41,17 +45,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var menuBarItem: NSStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private var langEventMonitor: Any?
-    private var editEventMonitor: Any?
     fileprivate var editEventTap: CFMachPort?
     private var editEventRunLoopSource: CFRunLoopSource?
     fileprivate var enabledKeyCodeSet: Set<CGKeyCode> = []
+    
+    fileprivate let eventSource: CGEventSource? = CGEventSource(stateID: .hidSystemState)
     
     private var editKeysState: EditHotKeys = []
     private var modifiersPressed = false
 
     private struct Constants {
-        // Launcher application bundle identifier
-        static let helperBundleID = "com.triton.layoutswitcherlauncher"
         // Icon image sixe
         static let imageSize = 18.0
         // Key code for a space bar
@@ -62,10 +65,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Init application menu and icon
         initMenu()
         
+        NSApp.setActivationPolicy(.accessory)
+        
         // Check security access to init event monitor
         if isApplicationHasSecurityAccess() {
-            initLanSwitchEventMonitor()
-            initWinEditEventMonitor()
+            if SettingsHelper.shared.isEnable {
+                initLanSwitchEventMonitor()
+                initWinEditEventMonitor()
+            }
         } else {
             let securityAlert = NSAlert()
             
@@ -85,6 +92,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ aNotification: Notification) {
+        clearInputSourcesCache()
         deinitLangEventMonitor()
         deinitEditEventMonitor()
     }
@@ -162,8 +170,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editHotkeysSubmenu.addItem(NSMenuItem.separator())
         editHotkeysSubmenu.addItem(newEditMenuItem("Print: Control ⌃ + P",key: "p",tag: EditHotKeys.Print))
     
-        //editHotkeysSubmenu.addItem(withTitle: "Close: ⌥F4",  action: #selector(applicationSetWinEditKey), keyEquivalent: "q")
-        
         // Define main menu
         let editkeysMenu = statusBarMenu.addItem(withTitle: "Edit shortcuts", action: nil, keyEquivalent: "")
         
@@ -194,7 +200,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let secondModifierFlag = arrayLangHotKeys[SettingsHelper.shared.checkedHotKeyIndex]
         
         // Enable key event monitor
-        langEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
+        langEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self = self else { return }
             let areModifiersActive = event.modifierFlags.contains(.shift) && event.modifierFlags.contains(secondModifierFlag)
             if areModifiersActive {
                 // set Flag when required modifier keys pressed
@@ -214,8 +221,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let enabledKeyCodes = keyCodes(for: editKeysState).map { CGKeyCode($0) }
         enabledKeyCodeSet = Set(enabledKeyCodes)
 
-        // Create CGEventTap for keyDown/keyUp to intercept before the system handles Control+<key>
-        let eventsMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.tapDisabledByTimeout.rawValue) | (1 << CGEventType.tapDisabledByUserInput.rawValue)
+        // Create CGEventTap for keyDown and tap disable notifications
+        let eventsMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.tapDisabledByTimeout.rawValue) | (1 << CGEventType.tapDisabledByUserInput.rawValue)
         if let tap = CGEvent.tapCreate(tap: .cghidEventTap,
                                        place: .headInsertEventTap,
                                        options: .defaultTap,
@@ -266,8 +273,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func updateEditEventMonitor() {
-        deinitEditEventMonitor()
-        initWinEditEventMonitor()
+        // Recalculate the enabled key codes set
+        let newSet = Set(keyCodes(for: editKeysState).map { CGKeyCode($0) })
+        if newSet.isEmpty {
+            // No keys to intercept — disable tap if present
+            enabledKeyCodeSet = []
+            deinitEditEventMonitor()
+            return
+        }
+        if editEventTap != nil {
+            enabledKeyCodeSet = newSet
+        } else {
+            enabledKeyCodeSet = newSet
+            initWinEditEventMonitor()
+        }
     }
     
     private func isApplicationHasSecurityAccess() -> Bool {
@@ -276,8 +295,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func openPrivacySettings() {
-        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .flatMap { _ = NSWorkspace.shared.open($0) }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            _ = NSWorkspace.shared.open(url)
+        }
     }
     
     // TODO: To add some more combinations for different use-cases
@@ -285,52 +305,69 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switchToNextKeyboardInputSource()
     }
 
-    // Switch to the next enabled keyboard input source (avoids relying on system hotkeys like Spotlight)
-    private func switchToNextKeyboardInputSource() {
+    // Cache of selectable keyboard input sources
+    private lazy var cachedInputSources: [TISInputSource] = {
+        var arr: [TISInputSource] = []
+        // Do not load here; will be loaded on first use by reloadInputSources()
+        return arr
+    }()
+    
+    private func clearInputSourcesCache() {
+        cachedInputSources.removeAll(keepingCapacity: false)
+    }
+
+    private func reloadInputSources() {
+        clearInputSourcesCache()
         let properties: [CFString: Any] = [
             kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
             kTISPropertyInputSourceIsEnabled: true,
             kTISPropertyInputSourceIsSelectCapable: true
         ]
-        let listRef: CFArray = TISCreateInputSourceList(properties as CFDictionary, false).takeRetainedValue()
-        let count = CFArrayGetCount(listRef)
-        guard count > 0 else { return }
+        let listAny: NSArray = TISCreateInputSourceList(properties as CFDictionary, false).takeRetainedValue() as NSArray
+        var result: [TISInputSource] = []
+        result.reserveCapacity(listAny.count)
+        for case let src as TISInputSource in listAny {
+            result.append(src)
+        }
+        cachedInputSources = result
+    }
+
+    // Switch to the next enabled keyboard input source (avoids relying on system hotkeys like Spotlight)
+    private func switchToNextKeyboardInputSource() {
+        if cachedInputSources.isEmpty { reloadInputSources() }
 
         let current: TISInputSource = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         guard let currentIDPtr = TISGetInputSourceProperty(current, kTISPropertyInputSourceID) else { return }
         let currentID = unsafeBitCast(currentIDPtr, to: CFString.self) as String
 
         var nextIndex = 0
-        for i in 0..<count {
-            let value = CFArrayGetValueAtIndex(listRef, i)
-            let src = unsafeBitCast(value, to: TISInputSource.self)
+        var found = false
+        for (i, src) in cachedInputSources.enumerated() {
             if let srcIDPtr = TISGetInputSourceProperty(src, kTISPropertyInputSourceID) {
                 let srcID = unsafeBitCast(srcIDPtr, to: CFString.self) as String
                 if srcID == currentID {
-                    nextIndex = (i + 1) % count
+                    nextIndex = (i + 1) % cachedInputSources.count
+                    found = true
                     break
                 }
             }
         }
-
-        let nextValue = CFArrayGetValueAtIndex(listRef, nextIndex)
-        let nextSrc = unsafeBitCast(nextValue, to: TISInputSource.self)
+        if !found { reloadInputSources() }
+        if cachedInputSources.isEmpty { return }
+        if !found {
+            // Retry once with fresh cache
+            for (i, src) in cachedInputSources.enumerated() {
+                if let srcIDPtr = TISGetInputSourceProperty(src, kTISPropertyInputSourceID) {
+                    let srcID = unsafeBitCast(srcIDPtr, to: CFString.self) as String
+                    if srcID == currentID {
+                        nextIndex = (i + 1) % cachedInputSources.count
+                        break
+                    }
+                }
+            }
+        }
+        let nextSrc = cachedInputSources[nextIndex]
         TISSelectInputSource(nextSrc)
-    }
-    
-    private func sendDefaultEditHotkey(_ key:String, code:UInt16) {
-        // Create a native system 'Control + Space' event
-        // TODO: maybe better to read system's layout hotkeys instead of hardcoding
-        let src = CGEventSource(stateID: CGEventSourceStateID.hidSystemState)
-        let keyDown = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)
-        let keyUp = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)
-        
-        keyDown?.flags = [.maskCommand]
-        keyUp?.flags = [.maskCommand]
-
-        let loc = CGEventTapLocation.cghidEventTap
-        keyDown?.post(tap: loc)
-        keyUp?.post(tap: loc)
     }
     
     @objc private func applicationChangeHotkey(_ sender: NSMenuItem) {
@@ -391,22 +428,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func launchAtLogin(_ newState: Bool) -> Bool {
-        var result = false
-        
         if #available(macOS 13.0, *) {
-                if newState == true {
-                    try? SMAppService.mainApp.register()
+            do {
+                if newState {
+                    try SMAppService.mainApp.register()
                 } else {
-                    try? SMAppService.mainApp.unregister()
+                    try SMAppService.mainApp.unregister()
                 }
-            
-                // FIXME: temporary hardcoded, get the status above
-                result = true
+                return true
+            } catch {
+                return false
+            }
         } else {
-            result = SMLoginItemSetEnabled(Constants.helperBundleID as CFString, newState)
+            // No separate launcher/helper used; not supported on older macOS
+            return false
         }
-
-        return result
     }
     
     @objc private func applicationAutostart(_ sender: NSMenuItem) {

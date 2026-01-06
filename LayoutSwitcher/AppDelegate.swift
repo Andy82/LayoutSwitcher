@@ -5,9 +5,18 @@ import Carbon
 
 // CGEventTap callback must not capture context; pass AppDelegate via refcon
 private func editEventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
-    guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
     guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
     let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+
+    // Re-enable tap if the system disabled it
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        if let tap = appDelegate.editEventTap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
 
     let flags = event.flags
     let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
@@ -33,10 +42,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarItem: NSStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private var langEventMonitor: Any?
     private var editEventMonitor: Any?
-    private var editEventTap: CFMachPort?
+    fileprivate var editEventTap: CFMachPort?
+    private var editEventRunLoopSource: CFRunLoopSource?
     fileprivate var enabledKeyCodeSet: Set<CGKeyCode> = []
     
-    private var enabledEditKeysValues: [String] = []
     private var editKeysState: EditHotKeys = []
     private var modifiersPressed = false
 
@@ -167,6 +176,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         autostartMenuItem.state = SettingsHelper.shared.isAutostartEnable ? .on : .off
         statusBarMenu.addItem(autostartMenuItem)
         
+        let disableItem = NSMenuItem(title: "Disable app", action: #selector(applicationDisable), keyEquivalent: "")
+        disableItem.state = SettingsHelper.shared.isEnable ? .off : .on
+        statusBarMenu.addItem(disableItem)
+        statusBarMenu.addItem(NSMenuItem.separator())
         
         // Define other menu items
         statusBarMenu.addItem(NSMenuItem.separator())
@@ -197,18 +210,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func initWinEditEventMonitor() {
-        // Build enabled keys from settings (still used by menu/UI if needed)
-        enabledEditKeysValues.removeAll()
-        for hotkeyType in editKeysState.elements() {
-            enabledEditKeysValues.append(contentsOf: editHotkeysValues[hotkeyType.rawValue] ?? [])
-        }
-
         // Collect layout-independent key codes for enabled options and store in property for callback access
         let enabledKeyCodes = keyCodes(for: editKeysState).map { CGKeyCode($0) }
         enabledKeyCodeSet = Set(enabledKeyCodes)
 
         // Create CGEventTap for keyDown/keyUp to intercept before the system handles Control+<key>
-        let eventsMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let eventsMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.tapDisabledByTimeout.rawValue) | (1 << CGEventType.tapDisabledByUserInput.rawValue)
         if let tap = CGEvent.tapCreate(tap: .cghidEventTap,
                                        place: .headInsertEventTap,
                                        options: .defaultTap,
@@ -216,9 +223,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                        callback: editEventTapCallback,
                                        userInfo: Unmanaged.passUnretained(self).toOpaque()) {
             editEventTap = tap
-            let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            editEventRunLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
+        } else {
+            // Could not create tap — likely due to missing permissions (Input Monitoring)
+            NSLog("Failed to create CGEventTap. Check Accessibility and Input Monitoring permissions.")
+            let alert = NSAlert()
+            alert.messageText = "Need Input Monitoring permission"
+            alert.informativeText = "Please enable LayoutSwitcher in System Settings → Privacy & Security → Input Monitoring and Accessibility, then restart the app."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Open Settings")
+            alert.addButton(withTitle: "OK")
+            if alert.runModal() == .alertFirstButtonReturn {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                    _ = NSWorkspace.shared.open(url)
+                }
+            }
         }
     }
     
@@ -228,6 +250,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func deinitEditEventMonitor() {
+        if let source = editEventRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+            editEventRunLoopSource = nil
+        }
         if let tap = editEventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             editEventTap = nil
@@ -263,7 +289,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func switchToNextKeyboardInputSource() {
         let properties: [CFString: Any] = [
             kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
-            kTISPropertyInputSourceIsEnabled: true
+            kTISPropertyInputSourceIsEnabled: true,
+            kTISPropertyInputSourceIsSelectCapable: true
         ]
         let listRef: CFArray = TISCreateInputSourceList(properties as CFDictionary, false).takeRetainedValue()
         let count = CFArrayGetCount(listRef)
@@ -350,6 +377,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Get the new state based on the menu item checkbox
         let disabled = sender.state == .on ? true : false
+        
+        SettingsHelper.shared.isEnable = !disabled
         
         if (disabled){
             deinitLangEventMonitor()

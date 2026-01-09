@@ -66,9 +66,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     fileprivate var rdpCtrlToCmdRemapEnabled = true
     fileprivate let rdpBundleIdentifiers: Set<String> = [
-        "com.microsoft.rdc.macos",            // Microsoft Remote Desktop
+        "com.microsoft.rdc.macos",           // Microsoft Remote Desktop
         "com.microsoft.rdc.macos.beta",      // Beta
-        "com.microsoft.rdc"                   // Legacy identifiers (if any)
+        "com.microsoft.rdc",                 // Legacy identifiers (if any)
+        "com.lemonmojo.RoyalTSX.App"         // Royal TSX
     ]
 
     private struct Constants {

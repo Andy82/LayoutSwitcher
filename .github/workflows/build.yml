@@ -15,6 +15,15 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build ( macOS x64)
       run: xcodebuild clean build -scheme LayoutSwitcherPack -destination 'platform=macOS,arch=x86_64' -derivedDataPath ${{ github.workspace }}/build CODE_SIGNING_ALLOWED=NO
+    - name: Locate app (x64)
+      run: |
+        APP_PATH=$(find "${{ github.workspace }}/build/Build/Products" -maxdepth 3 -type d -name "*.app" | head -n 1)
+        echo "APP_PATH_X64=$APP_PATH" >> $GITHUB_ENV
+    - name: Upload app artifact (x64)
+      uses: actions/upload-artifact@v4
+      with:
+        name: LayoutSwitcher-x64
+        path: ${{ env.APP_PATH_X64 }}
     # GitHub provides Apple Silicon runners on macos-14.
     - name: List files in the repository
       run: |
@@ -27,6 +36,7 @@ jobs:
         filename: 'LayoutSwitcher.zip'
         exclusions: '*.git* .editorconfig' 
     - name: Upload Release
+      if: startsWith(github.ref, 'refs/tags/')
       uses: ncipollo/release-action@v1
       with:
         artifacts: "LayoutSwitcher.zip"
@@ -38,3 +48,12 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build ( macOS arm64)
       run: xcodebuild clean build -scheme LayoutSwitcherPack -destination 'platform=macOS,arch=arm64' -derivedDataPath ${{ github.workspace }}/build-arm64 CODE_SIGNING_ALLOWED=NO
+    - name: Locate app (arm64)
+      run: |
+        APP_PATH=$(find "${{ github.workspace }}/build-arm64/Build/Products" -maxdepth 3 -type d -name "*.app" | head -n 1)
+        echo "APP_PATH_ARM64=$APP_PATH" >> $GITHUB_ENV
+    - name: Upload app artifact (arm64)
+      uses: actions/upload-artifact@v4
+      with:
+        name: LayoutSwitcher-arm64
+        path: ${{ env.APP_PATH_ARM64 }}

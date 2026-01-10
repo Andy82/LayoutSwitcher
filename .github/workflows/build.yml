@@ -13,8 +13,8 @@ jobs:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Build ( macOS x64 12.0 Monterey)
-      run: xcodebuild clean build -scheme LayoutSwitcherPack -destination 'platform=macOS,arch=x86_64,id=4203018E-580F-C1B5-9525-B745CECA79EB' -derivedDataPath ${{ github.workspace }}/build 
+    - name: Build ( macOS x64)
+      run: xcodebuild clean build -scheme LayoutSwitcherPack -destination 'platform=macOS,arch=x86_64' -derivedDataPath ${{ github.workspace }}/build CODE_SIGNING_ALLOWED=NO
     # GitHub provides Apple Silicon runners on macos-14.
     - name: List files in the repository
       run: |
@@ -37,4 +37,4 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Build ( macOS arm64)
-      run: xcodebuild clean build -scheme LayoutSwitcherPack -destination 'platform=macOS,arch=arm64' -derivedDataPath ${{ github.workspace }}/build-arm64
+      run: xcodebuild clean build -scheme LayoutSwitcherPack -destination 'platform=macOS,arch=arm64' -derivedDataPath ${{ github.workspace }}/build-arm64 CODE_SIGNING_ALLOWED=NO

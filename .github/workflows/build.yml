@@ -28,18 +28,15 @@ jobs:
     - name: List files in the repository
       run: |
         ls ${{ github.workspace }}
-    - name: Archive Release
-      uses: thedoctor0/zip-release@main
-      with:
-        path: '.'
-        type: 'zip'
-        filename: 'LayoutSwitcher.zip'
-        exclusions: '*.git* .editorconfig' 
-    - name: Upload Release
+    - name: Package app (x64)
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        ditto -c -k --sequesterRsrc --keepParent "${{ env.APP_PATH_X64 }}" LayoutSwitcher-x64.zip
+    - name: Upload Release (x64)
       if: startsWith(github.ref, 'refs/tags/')
       uses: ncipollo/release-action@v1
       with:
-        artifacts: "LayoutSwitcher.zip"
+        artifacts: "LayoutSwitcher-x64.zip"
         token: ${{ secrets.GITHUB_TOKEN }}
 
   build-m1:
@@ -57,3 +54,13 @@ jobs:
       with:
         name: LayoutSwitcher-arm64
         path: ${{ env.APP_PATH_ARM64 }}
+    - name: Package app (arm64)
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        ditto -c -k --sequesterRsrc --keepParent "${{ env.APP_PATH_ARM64 }}" LayoutSwitcher-arm64.zip
+    - name: Upload Release (arm64)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: ncipollo/release-action@v1
+      with:
+        artifacts: "LayoutSwitcher-arm64.zip"
+        token: ${{ secrets.GITHUB_TOKEN }}

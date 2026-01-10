@@ -76,9 +76,15 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: release-assets
-    - name: Upload Release
-      uses: ncipollo/release-action@v1
-      with:
-        artifacts: "release-assets/**/*.dmg"
-        allowUpdates: true
-        token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Publish release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG="${GITHUB_REF_NAME}"
+        gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes ""
+        FILES=$(find release-assets -type f -name '*.dmg')
+        if [ -z "$FILES" ]; then
+          echo "No DMG files found in release-assets" >&2
+          exit 1
+        fi
+        gh release upload "$TAG" $FILES --clobber

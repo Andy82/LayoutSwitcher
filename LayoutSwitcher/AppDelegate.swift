@@ -65,12 +65,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var modifiersPressed = false
     
     fileprivate var rdpCtrlToCmdRemapEnabled = true
-    fileprivate let rdpBundleIdentifiers: Set<String> = [
-        "com.microsoft.rdc.macos",           // Microsoft Remote Desktop
-        "com.microsoft.rdc.macos.beta",      // Beta
-        "com.microsoft.rdc",                 // Legacy identifiers (if any)
-        "com.lemonmojo.RoyalTSX.App"         // Royal TSX
-    ]
+    fileprivate var rdpBundleIdentifiers: Set<String> {
+        get {
+            let saved = UserDefaults.standard.array(forKey: "RDPBundleIdentifiers") as? [String]
+            if let saved, !saved.isEmpty {
+                return Set(saved)
+            }
+            // default seed values
+            return [
+                "com.microsoft.rdc.macos",           // Microsoft Remote Desktop
+                "com.microsoft.rdc.macos.beta",      // Beta
+                "com.microsoft.rdc",                 // Legacy identifiers (if any)
+                "com.lemonmojo.RoyalTSX.App"         // Royal TSX
+            ]
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue), forKey: "RDPBundleIdentifiers")
+        }
+    }
 
     private struct Constants {
         // Icon image sixe
@@ -208,6 +220,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let rdpRemapItem = NSMenuItem(title: "Remap Ctrl→Cmd in RDP", action: #selector(toggleRdpRemap), keyEquivalent: "r")
         rdpRemapItem.state = rdpCtrlToCmdRemapEnabled ? .on : .off
         statusBarMenu.addItem(rdpRemapItem)
+        
+        let rdpAppsItem = NSMenuItem(title: "RDP Apps…", action: nil, keyEquivalent: "")
+        let rdpAppsSubmenu = NSMenu()
+        rdpAppsItem.submenu = rdpAppsSubmenu
+        statusBarMenu.addItem(rdpAppsItem)
+        
+        // Removed original call to rebuildRdpAppsMenu() here
+        
         statusBarMenu.addItem(NSMenuItem.separator())
         
         // Define other menu items
@@ -216,11 +236,80 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarMenu.addItem(withTitle: "Quit", action: #selector(applicationQuit), keyEquivalent: "q")
         
         menuBarItem.menu = statusBarMenu
+        
+        rebuildRdpAppsMenu()
     }
     
     @objc private func toggleRdpRemap(_ sender: NSMenuItem) {
         sender.state = sender.state == .on ? .off : .on
         rdpCtrlToCmdRemapEnabled = (sender.state == .on)
+    }
+    
+    private func presentAddAppPanelAndAddBundleID() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose an app to add"
+        if #available(macOS 11.0, *) {
+            panel.allowedContentTypes = [.application]
+        } else {
+            panel.allowedFileTypes = ["app"]
+        }
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.canCreateDirectories = false
+
+        if panel.runModal() == .OK, let url = panel.url,
+           let bundle = Bundle(url: url),
+           let bundleID = bundle.bundleIdentifier {
+            var set = rdpBundleIdentifiers
+            set.insert(bundleID)
+            rdpBundleIdentifiers = set
+            rebuildRdpAppsMenu()
+        }
+    }
+
+    @objc private func toggleRdpApp(_ sender: NSMenuItem) {
+        guard let bundleID = sender.representedObject as? String else { return }
+        var set = rdpBundleIdentifiers
+        if sender.state == .on {
+            // turning off -> remove
+            set.remove(bundleID)
+            sender.state = .off
+        } else {
+            set.insert(bundleID)
+            sender.state = .on
+        }
+        rdpBundleIdentifiers = set
+    }
+    
+    private func rebuildRdpAppsMenu() {
+        // Prefer the attached menu; otherwise try to find from status item if available
+        let targetMenu: NSMenu?
+        if let attached = menuBarItem.menu {
+            targetMenu = attached
+        } else {
+            targetMenu = nil
+        }
+        guard let menu = targetMenu ?? menuBarItem.menu else { return }
+        if let rdpMenuItem = menu.item(withTitle: "RDP Apps…"), let submenu = rdpMenuItem.submenu {
+            submenu.removeAllItems()
+            let ids = Array(rdpBundleIdentifiers).sorted()
+            for id in ids {
+                let item = NSMenuItem(title: id, action: #selector(toggleRdpApp(_:)), keyEquivalent: "")
+                item.state = .on
+                item.representedObject = id
+                item.target = self
+                submenu.addItem(item)
+            }
+            if !ids.isEmpty { submenu.addItem(NSMenuItem.separator()) }
+            let addItem = NSMenuItem(title: "Add App…", action: #selector(addRdpApp(_:)), keyEquivalent: "")
+            addItem.target = self
+            submenu.addItem(addItem)
+        }
+    }
+
+    @objc private func addRdpApp(_ sender: NSMenuItem) {
+        presentAddAppPanelAndAddBundleID()
     }
     
     private func initLanSwitchEventMonitor() {
@@ -284,6 +373,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func deinitLangEventMonitor() {
         guard langEventMonitor != nil else {return}
         NSEvent.removeMonitor(langEventMonitor!)
+        langEventMonitor = nil
         clearInputSourcesCache()
     }
     

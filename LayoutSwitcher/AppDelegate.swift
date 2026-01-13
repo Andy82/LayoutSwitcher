@@ -21,6 +21,31 @@ private func editEventTapCallback(proxy: CGEventTapProxy, type: CGEventType, eve
         let flags = event.flags
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
 
+        // Map Fn+Z to Control+Z
+        // Fn modifier is represented by maskSecondaryFn in CGEventFlags
+        if flags.contains(.maskSecondaryFn) {
+            // If option is enabled and current key is in the enabled edit combos list, do not substitute — allow system behavior
+            if appDelegate.ignoreFnSubstitutionForEditCombos && appDelegate.enabledKeyCodeSet.contains(keyCode) {
+                return Unmanaged.passUnretained(event)
+            }
+            // 'Z' key keycode is typically 6 on ANSI keyboards; we use layout-independent keyCode from the event
+            // Only act when Control is not already pressed to avoid double firing
+            if keyCode == 6 && !flags.contains(.maskControl) {
+                if let src = appDelegate.eventSource {
+                    if let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true) {
+                        down.flags = CGEventFlags.maskControl
+                        down.post(tap: CGEventTapLocation.cghidEventTap)
+                    }
+                    if let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) {
+                        up.flags = CGEventFlags.maskControl
+                        up.post(tap: CGEventTapLocation.cghidEventTap)
+                    }
+                }
+                // Suppress the original Fn+Z event
+                return nil
+            }
+        }
+
         if flags.contains(.maskControl), appDelegate.enabledKeyCodeSet.contains(keyCode) {
             // If frontmost app is RDP and remap is enabled, convert Ctrl→Cmd; otherwise, for non-RDP do the same conversion
             if let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
@@ -65,6 +90,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var modifiersPressed = false
     
     fileprivate var rdpCtrlToCmdRemapEnabled = true
+    fileprivate var ignoreFnSubstitutionForEditCombos: Bool {
+        get { UserDefaults.standard.bool(forKey: "IgnoreFnSubstitutionForEditCombos") }
+        set { UserDefaults.standard.set(newValue, forKey: "IgnoreFnSubstitutionForEditCombos") }
+    }
     fileprivate var rdpBundleIdentifiers: Set<String> {
         get {
             let saved = UserDefaults.standard.array(forKey: "RDPBundleIdentifiers") as? [String]
@@ -221,6 +250,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rdpRemapItem.state = rdpCtrlToCmdRemapEnabled ? .on : .off
         statusBarMenu.addItem(rdpRemapItem)
         
+        let ignoreFnItem = NSMenuItem(title: "Ignore Fn substitution for edit combos", action: #selector(toggleIgnoreFnSubstitution), keyEquivalent: "")
+        ignoreFnItem.state = ignoreFnSubstitutionForEditCombos ? .on : .off
+        statusBarMenu.addItem(ignoreFnItem)
+        
         let rdpAppsItem = NSMenuItem(title: "RDP Apps…", action: nil, keyEquivalent: "")
         let rdpAppsSubmenu = NSMenu()
         rdpAppsItem.submenu = rdpAppsSubmenu
@@ -238,6 +271,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarItem.menu = statusBarMenu
         
         rebuildRdpAppsMenu()
+    }
+    
+    @objc private func toggleIgnoreFnSubstitution(_ sender: NSMenuItem) {
+        sender.state = sender.state == .on ? .off : .on
+        ignoreFnSubstitutionForEditCombos = (sender.state == .on)
     }
     
     @objc private func toggleRdpRemap(_ sender: NSMenuItem) {

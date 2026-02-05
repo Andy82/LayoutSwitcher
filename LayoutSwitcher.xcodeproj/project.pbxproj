@@ -11,6 +11,7 @@
 		48B8ED3E27C4FF5F0052E61A /* SettingsHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48B8ED3D27C4FF5F0052E61A /* SettingsHelper.swift */; };
 		48B8ED5B27C6625F0052E61A /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 48B8ED5927C6625F0052E61A /* Main.storyboard */; };
 		48B8ED5D27C662E80052E61A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48B8ED5C27C662E80052E61A /* AppDelegate.swift */; };
+		75D9FD5D2F35094300A2CE88 /* KeyboardLayoutOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75D9FD5C2F35094300A2CE88 /* KeyboardLayoutOverlay.swift */; };
 		825E597426A9BD1700B954AC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 825E597326A9BD1700B954AC /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -32,6 +33,7 @@
 		48B8ED3D27C4FF5F0052E61A /* SettingsHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHelper.swift; sourceTree = "<group>"; };
 		48B8ED5A27C6625F0052E61A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		48B8ED5C27C662E80052E61A /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		75D9FD5C2F35094300A2CE88 /* KeyboardLayoutOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayoutOverlay.swift; sourceTree = "<group>"; };
 		825E596C26A9BD1600B954AC /* LayoutSwitcher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutSwitcher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		825E597326A9BD1700B954AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		825E597B26A9BD1700B954AC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -76,6 +78,7 @@
 				825E597B26A9BD1700B954AC /* Info.plist */,
 				825E597C26A9BD1700B954AC /* LayoutSwitcher.entitlements */,
 				19C0A7D5283D17DB00F6458E /* HotkeysHelper.swift */,
+				75D9FD5C2F35094300A2CE88 /* KeyboardLayoutOverlay.swift */,
 			);
 			path = LayoutSwitcher;
 			sourceTree = "<group>";
@@ -153,6 +156,7 @@
 				19C0A7D6283D17DB00F6458E /* HotkeysHelper.swift in Sources */,
 				48B8ED5D27C662E80052E61A /* AppDelegate.swift in Sources */,
 				48B8ED3E27C4FF5F0052E61A /* SettingsHelper.swift in Sources */,
+				75D9FD5D2F35094300A2CE88 /* KeyboardLayoutOverlay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -313,7 +317,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 11.5;
-				MARKETING_VERSION = 2.1;
+				MARKETING_VERSION = 2.2;
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = com.triton.layoutswitcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -346,7 +350,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 11.5;
-				MARKETING_VERSION = 2.1;
+				MARKETING_VERSION = 2.2;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.triton.layoutswitcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";

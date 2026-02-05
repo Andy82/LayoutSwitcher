@@ -120,6 +120,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         static var spaceKeyCode: CGKeyCode = 0x31
     }
 
+    // Added properties for overlay support
+    private var overlayControllers: [KeyboardLayoutOverlayController] = []
+    private var overlayObserver: NSObjectProtocol?
+    private var overlayCFObserver: UnsafeRawPointer?
+
     public func applicationDidFinishLaunching(_ aNotification: Notification) {
         // Init application menu and icon
         initMenu()
@@ -148,12 +153,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Shutdown the application anyway
             exit(-1)
         }
+
+        // Setup overlay windows after app launch
+        setupOverlayWindows()
     }
 
     public func applicationWillTerminate(_ aNotification: Notification) {
         clearInputSourcesCache()
         deinitLangEventMonitor()
         deinitEditEventMonitor()
+        // Close overlays on termination
+        for ctrl in overlayControllers {
+            ctrl.close()
+        }
+        overlayControllers.removeAll()
+        if let observer = overlayObserver {
+            NotificationCenter.default.removeObserver(observer)
+            overlayObserver = nil
+        }
+        if let observer = overlayCFObserver {
+            CFNotificationCenterRemoveObserver(CFNotificationCenterGetDistributedCenter(), observer, nil, nil)
+            overlayCFObserver = nil
+        }
     }
     
     private func updateEditMenuState(editkeysMenu: NSMenuItem){
@@ -236,6 +257,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editkeysMenu.submenu = editHotkeysSubmenu
         updateEditMenuState(editkeysMenu: editkeysMenu)
         
+        // Overlay section menu item
+        let overlaySectionMenuItem = statusBarMenu.addItem(withTitle: "Keyboard Layout Overlay", action: nil, keyEquivalent: "")
+        let overlaySubmenu = NSMenu()
+        overlaySectionMenuItem.submenu = overlaySubmenu
+
+        // Overlay enabled menu item
+        let overlayEnabledMenuItem = NSMenuItem(title: "Show Keyboard Layout Overlay", action: #selector(toggleOverlayEnabled(_:)), keyEquivalent: "l")
+        overlayEnabledMenuItem.state = SettingsHelper.shared.overlayEnabled ? .on : .off
+        overlayEnabledMenuItem.target = self
+        overlaySubmenu.addItem(overlayEnabledMenuItem)
+
+        // Overlay show on all screens menu item
+        let overlayOnAllScreensItem = NSMenuItem(title: "Show on All Screens", action: #selector(toggleOverlayShowOnAllScreens(_:)), keyEquivalent: "")
+        overlayOnAllScreensItem.state = SettingsHelper.shared.overlayShowOnAllScreens ? .on : .off
+        overlayOnAllScreensItem.target = self
+        overlaySubmenu.addItem(overlayOnAllScreensItem)
+
         // Define autostart menu and get previos state
         let autostartMenuItem = NSMenuItem(title: "Launch at login", action: #selector(applicationAutostart), keyEquivalent: "s")
         autostartMenuItem.state = SettingsHelper.shared.isAutostartEnable ? .on : .off
@@ -263,6 +301,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         statusBarMenu.addItem(NSMenuItem.separator())
         
+        // Removed old overlayEnabledMenuItem and overlayOnAllScreensItem from statusBarMenu (if they existed) - not needed as we don't add those items here anymore
+        
         // Define other menu items
         statusBarMenu.addItem(NSMenuItem.separator())
         statusBarMenu.addItem(withTitle: "About...", action: #selector(applicationAbout), keyEquivalent: "a")
@@ -271,6 +311,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarItem.menu = statusBarMenu
         
         rebuildRdpAppsMenu()
+    }
+    
+    @objc private func toggleOverlayEnabled(_ sender: NSMenuItem) {
+        sender.state = sender.state == .on ? .off : .on
+        SettingsHelper.shared.overlayEnabled = (sender.state == .on)
+        setupOverlayWindows()
+    }
+    
+    @objc private func toggleOverlayShowOnAllScreens(_ sender: NSMenuItem) {
+        sender.state = sender.state == .on ? .off : .on
+        SettingsHelper.shared.overlayShowOnAllScreens = (sender.state == .on)
+        setupOverlayWindows()
+    }
+    
+    @objc private func toggleOverlayOnAllScreens(_ sender: NSMenuItem) {
+        sender.state = sender.state == .on ? .off : .on
+        SettingsHelper.shared.overlayShowOnAllScreens = (sender.state == .on)
+        setupOverlayWindows()
     }
     
     @objc private func toggleIgnoreFnSubstitution(_ sender: NSMenuItem) {
@@ -641,6 +699,89 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func applicationQuit() {
         exit(0)
+    }
+    
+    // MARK: - Overlay window support
+    
+    private func setupOverlayWindows() {
+        // If overlay is disabled, close and remove all overlay controllers and return
+        if !SettingsHelper.shared.overlayEnabled {
+            for ctrl in overlayControllers {
+                ctrl.close()
+            }
+            overlayControllers.removeAll()
+            return
+        }
+        
+        // Close old overlays
+        for ctrl in overlayControllers {
+            ctrl.close()
+        }
+        overlayControllers.removeAll()
+        
+        let showAll = SettingsHelper.shared.overlayShowOnAllScreens
+        let screens = showAll ? NSScreen.screens : (NSScreen.main.map { [$0] } ?? [])
+        
+        for screen in screens {
+            let id = screen.localizedName
+            let pos = SettingsHelper.shared.overlayPosition(forScreenID: id) ?? NSPoint(x: screen.visibleFrame.midX - 60, y: screen.visibleFrame.maxY - 100)
+            let ctrl = KeyboardLayoutOverlayController(screen: screen, initialOrigin: pos)
+            
+            let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+            if let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) {
+                let cfstr = unsafeBitCast(ptr, to: CFString.self)
+                let id = cfstr as String
+                let label: String
+                if id.contains("Russian") { label = "RU" }
+                else if id.contains("US") { label = "US" }
+                else { label = "??" }
+                ctrl.updateKeyboardLayout(label)
+            } else {
+                ctrl.updateKeyboardLayout("--")
+            }
+            
+            ctrl.window?.makeKeyAndOrderFront(nil)
+            overlayControllers.append(ctrl)
+        }
+        startOverlayKeyboardLayoutObservation()
+    }
+    
+    private func startOverlayKeyboardLayoutObservation() {
+        if let observer = overlayCFObserver {
+            CFNotificationCenterRemoveObserver(CFNotificationCenterGetDistributedCenter(), observer, nil, nil)
+            overlayCFObserver = nil
+        }
+        let callback: CFNotificationCallback = { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                (NSApp.delegate as? AppDelegate)?.updateOverlayLayout()
+            }
+        }
+        let observer = UnsafeRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        overlayCFObserver = observer
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDistributedCenter(),
+                                        observer,
+                                        callback,
+                                        kTISNotifySelectedKeyboardInputSourceChanged,
+                                        nil,
+                                        .deliverImmediately)
+        updateOverlayLayout()
+    }
+    
+    private func updateOverlayLayout() {
+        let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        for ctrl in overlayControllers {
+            if let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) {
+                let cfstr = unsafeBitCast(ptr, to: CFString.self)
+                let id = cfstr as String
+                let label: String
+                if id.contains("Russian") { label = "RU" }
+                else if id.contains("US") { label = "US" }
+                else { label = "??" }
+                ctrl.updateKeyboardLayout(label)
+            } else {
+                ctrl.updateKeyboardLayout("--")
+            }
+        }
     }
 }
 

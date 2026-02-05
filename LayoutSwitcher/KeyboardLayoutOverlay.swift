@@ -75,13 +75,20 @@ final class KeyboardLayoutOverlayController: NSWindowController {
 final class KeyboardLayoutOverlayView: NSView {
     var layoutName: String = "---" { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
+    
     override func draw(_ dirtyRect: NSRect) {
+        let radius: CGFloat = min(bounds.width, bounds.height) * 0.22
+        let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
         NSColor(calibratedWhite: 0.1, alpha: 0.60).setFill()
-        bounds.fill()
+        path.fill()
+        
+        let textColor: NSColor = .white
+        
         let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.white,
+            .foregroundColor: textColor,
             .font: NSFont.monospacedSystemFont(ofSize: 48, weight: .medium)
         ]
+        
         let string = layoutName
         let size = string.size(withAttributes: attrs)
         let point = NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2)

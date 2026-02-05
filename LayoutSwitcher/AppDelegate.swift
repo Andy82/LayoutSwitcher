@@ -727,6 +727,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let pos = SettingsHelper.shared.overlayPosition(forScreenID: id) ?? NSPoint(x: screen.visibleFrame.midX - 60, y: screen.visibleFrame.maxY - 100)
             let ctrl = KeyboardLayoutOverlayController(screen: screen, initialOrigin: pos)
             
+            ctrl.onPositionChanged = { pos in
+                SettingsHelper.shared.setOverlayPosition(pos, forScreenID: id)
+            }
+            
             let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
             if let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) {
                 let cfstr = unsafeBitCast(ptr, to: CFString.self)

@@ -18,26 +18,18 @@ private func editEventTapCallback(
 
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
-        let flags = event.flags
-        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-
-        // Control+Command+<key> → Command+<key>
-        if flags.contains(.maskControl) && flags.contains(.maskCommand),
-           app.enabledKeyCodeSet.contains(keyCode) {
-            postKey(keyCode, flags: .maskCommand, source: app.eventSource)
-            return nil
+        // Skip synthetic events posted by us
+        if event.getIntegerValueField(.eventSourceUserData) == 0xCAFE {
+            return Unmanaged.passUnretained(event)
         }
 
-        // Fn+Z → Control+Z (unless ignoreFnSubstitution is active for this key)
-        if flags.contains(.maskSecondaryFn) {
-            if app.ignoreFnSubstitutionForEditCombos && app.enabledKeyCodeSet.contains(keyCode) {
-                return Unmanaged.passUnretained(event)
-            }
-            if keyCode == KeyCode.z.rawValue && !flags.contains(.maskControl) {
-                guard !app.isFrontmostAppDisabled else { return Unmanaged.passUnretained(event) }
-                postKey(keyCode, flags: .maskControl, source: app.eventSource)
-                return nil
-            }
+        let flags = event.flags
+        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        // Option+Ctrl+<key> → Ctrl+<key> (global bypass)
+        if flags.contains(.maskAlternate) && flags.contains(.maskControl),
+           app.enabledKeyCodeSet.contains(keyCode) {
+            postKey(keyCode, flags: .maskControl, source: app.eventSource)
+            return nil
         }
 
         // Control+<key> → Command+<key>
@@ -55,10 +47,12 @@ private func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags, source: CGEventS
     guard let src = source else { return }
     if let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true) {
         down.flags = flags
+        down.setIntegerValueField(.eventSourceUserData, value: 0xCAFE)
         down.post(tap: .cghidEventTap)
     }
     if let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) {
         up.flags = flags
+        up.setIntegerValueField(.eventSourceUserData, value: 0xCAFE)
         up.post(tap: .cghidEventTap)
     }
 }
@@ -213,7 +207,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remapLabel.isEnabled = false
         statusBarMenu.addItem(remapLabel)
 
-        let ignoreFnItem = NSMenuItem(title: "Ignore Fn substitution for edit combos", action: #selector(toggleIgnoreFnSubstitution), keyEquivalent: "")
+        let ignoreFnItem = NSMenuItem(title: "Ignore Option+Ctrl substitution for edit combos", action: #selector(toggleIgnoreFnSubstitution), keyEquivalent: "")
         ignoreFnItem.state = ignoreFnSubstitutionForEditCombos ? .on : .off
         statusBarMenu.addItem(ignoreFnItem)
 
